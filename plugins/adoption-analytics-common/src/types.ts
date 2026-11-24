@@ -63,6 +63,57 @@ export interface EntityCountSnapshot {
   total: number;
 }
 
+export type CatalogDimension =
+  | 'kind'
+  | 'type'
+  | 'owner'
+  | 'system'
+  | 'domain'
+  | 'lifecycle'
+  | 'namespace'
+  | 'tag';
+
+export type CatalogDimensionFilter =
+  | {
+      dimension: 'tag';
+      value: string;
+      match?: 'and' | 'or';
+    }
+  | {
+      dimension: Exclude<CatalogDimension, 'tag'>;
+      value: string;
+    }
+  | { dimension: 'annotation'; key: string; value: string };
+
+export type CatalogDimensionOptions = Record<CatalogDimension, string[]> & {
+  annotations: string[];
+};
+
+export interface CatalogDimensionCount {
+  /** Null represents an entity without a value for the selected dimension. */
+  value: string | null;
+  count: number;
+}
+
+export interface CatalogDimensionSnapshot {
+  /** ISO date (YYYY-MM-DD) of the catalog snapshot. */
+  date: string;
+  counts: CatalogDimensionCount[];
+}
+
+/**
+ * Filtered catalog entity counts over time, grouped by one entity dimension.
+ * The existing dashboard response remains unchanged; this is returned by
+ * the dedicated catalog-dimensions endpoint.
+ */
+export interface CatalogDimensionAnalytics {
+  days: number;
+  groupBy: CatalogDimension;
+  filters: CatalogDimensionFilter[];
+  options: CatalogDimensionOptions;
+  snapshots: CatalogDimensionSnapshot[];
+}
+
 /**
  * Aggregated active-user counts over a rolling time window.
  */

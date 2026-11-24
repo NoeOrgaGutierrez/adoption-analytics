@@ -1,6 +1,9 @@
 import { createApiRef } from '@backstage/core-plugin-api';
 import type {
   ActiveUsersSummary,
+  CatalogDimension,
+  CatalogDimensionAnalytics,
+  CatalogDimensionFilter,
   EntityCountSnapshot,
   AdoptionAnalyticsDashboard,
   AdoptionAnalyticsEvent,
@@ -15,6 +18,11 @@ import type {
 export interface AdoptionAnalyticsApi {
   postEvents: (events: AdoptionAnalyticsEvent[]) => Promise<void>;
   getEntityCounts: (days?: number) => Promise<EntityCountSnapshot[]>;
+  getCatalogDimensions: (
+    days: number,
+    groupBy: CatalogDimension,
+    filters: CatalogDimensionFilter[],
+  ) => Promise<CatalogDimensionAnalytics>;
   getActiveUsers: (
     window: 'daily' | 'weekly',
     days?: number,

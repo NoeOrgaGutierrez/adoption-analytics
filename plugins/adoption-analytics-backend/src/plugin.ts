@@ -9,6 +9,9 @@ import { EntitySnapshotCollector } from './service/EntitySnapshotCollector';
 import { EventsQueue } from './service/EventsQueue';
 import { AdoptionAnalyticsDashboardService } from './service/AdoptionAnalyticsDashboardService';
 import { AdoptionAnalyticsDatabase } from './service/AdoptionAnalyticsDatabase';
+import { CatalogDimensionService } from './service/CatalogDimensionService';
+
+const CATALOG_DIMENSION_RETENTION_DAYS = 365;
 
 export const adoptionAnalyticsPlugin = createBackendPlugin({
   pluginId: 'adoption-analytics',
@@ -62,6 +65,8 @@ export const adoptionAnalyticsPlugin = createBackendPlugin({
           auth,
         });
 
+        const catalogDimensions = new CatalogDimensionService({ db });
+
         await scheduler.scheduleTask({
           id: 'adoption-analytics-entity-snapshot',
           // Dev cadence: refresh entity snapshots every 5 minutes so
@@ -101,6 +106,15 @@ export const adoptionAnalyticsPlugin = createBackendPlugin({
                 `adoption-analytics-backend: retention pruned ${removed} events older than ${retentionDays} days`,
               );
             }
+            const removedCatalogSnapshots =
+              await db.deleteCatalogEntitySnapshotsOlderThan(
+                CATALOG_DIMENSION_RETENTION_DAYS,
+              );
+            if (removedCatalogSnapshots > 0) {
+              logger.info(
+                `adoption-analytics-backend: retention pruned ${removedCatalogSnapshots} catalog dimension snapshots older than ${CATALOG_DIMENSION_RETENTION_DAYS} days`,
+              );
+            }
           },
         });
 
@@ -109,6 +123,7 @@ export const adoptionAnalyticsPlugin = createBackendPlugin({
             logger,
             db,
             dashboard,
+            catalogDimensions,
             httpAuth,
             userInfo,
             cache,

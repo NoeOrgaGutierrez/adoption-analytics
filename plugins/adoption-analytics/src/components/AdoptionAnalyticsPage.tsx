@@ -230,7 +230,7 @@ function renderBody({
         <UsersSection data={data} classes={classes} />
       ) : null}
       {activeTab === 'catalog' ? (
-        <CatalogSection data={data} classes={classes} />
+        <CatalogSection data={data} classes={classes} range={data.range} />
       ) : null}
       {activeTab === 'search' ? (
         <SearchSection data={data} classes={classes} />
@@ -259,10 +259,13 @@ function UsersSection({ data, classes }: SectionProps) {
   );
 }
 
-function CatalogSection({ data }: SectionProps) {
+function CatalogSection({
+  data,
+  range,
+}: SectionProps & { range: AdoptionAnalyticsTimeRange }) {
   return (
     <>
-      <EntityGrowthChart data={data.entityGrowth} />
+      <EntityGrowthChart data={data.entityGrowth} range={range} />
       <TopEntitiesTable entities={data.topEntities} />
       <TopDocsTable docs={data.topDocs} />
       <TopPagesTable pages={data.topPages} />

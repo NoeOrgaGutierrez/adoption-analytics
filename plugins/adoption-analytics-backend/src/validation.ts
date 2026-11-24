@@ -37,6 +37,52 @@ export const entityCountsQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(365).default(30),
 });
 
+const catalogDimension = z.enum([
+  'kind',
+  'type',
+  'owner',
+  'system',
+  'domain',
+  'lifecycle',
+  'namespace',
+  'tag',
+]);
+
+export const catalogDimensionFiltersSchema = z
+  .array(
+    z.discriminatedUnion('dimension', [
+      z.object({
+        dimension: z.literal('tag'),
+        value: z.string().min(1).max(512),
+        match: z.enum(['and', 'or']).optional(),
+      }),
+      z.object({
+        dimension: z.enum([
+          'kind',
+          'type',
+          'owner',
+          'system',
+          'domain',
+          'lifecycle',
+          'namespace',
+        ]),
+        value: z.string().min(1).max(512),
+      }),
+      z.object({
+        dimension: z.literal('annotation'),
+        key: z.string().min(1).max(512),
+        value: z.string().min(1).max(512),
+      }),
+    ]),
+  )
+  .max(20);
+
+export const catalogDimensionsQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(365).default(30),
+  groupBy: catalogDimension.default('kind'),
+  filters: z.string().max(8192).optional(),
+});
+
 export const dashboardQuerySchema = z.object({
   range: z.enum(['7d', '30d', '90d']).default('30d'),
 });

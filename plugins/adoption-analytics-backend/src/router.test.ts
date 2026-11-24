@@ -11,6 +11,7 @@ import { AuthorizeResult } from '@backstage/plugin-permission-common';
 import {
   adoptionAnalyticsPageViewPermission,
   adoptionAnalyticsUsersReadPermission,
+  type CatalogDimensionAnalytics,
 } from '@codeverse-gp/plugin-adoption-analytics-common';
 import express from 'express';
 import request from 'supertest';
@@ -18,6 +19,7 @@ import { createRouter } from './router';
 import type { EventsQueue } from './service/EventsQueue';
 import type { AdoptionAnalyticsDashboardService } from './service/AdoptionAnalyticsDashboardService';
 import type { AdoptionAnalyticsDatabase } from './service/AdoptionAnalyticsDatabase';
+import type { CatalogDimensionService } from './service/CatalogDimensionService';
 
 function makeDbMock(): jest.Mocked<AdoptionAnalyticsDatabase> {
   return {
@@ -65,6 +67,31 @@ function makeDashboardMock(): jest.Mocked<AdoptionAnalyticsDashboardService> {
       avgSessionMinutes: { value: 0, deltaPct: null },
     }),
   } as unknown as jest.Mocked<AdoptionAnalyticsDashboardService>;
+}
+
+function makeCatalogDimensionsMock(): jest.Mocked<
+  Pick<CatalogDimensionService, 'getCatalogDimensions'>
+> {
+  const result: CatalogDimensionAnalytics = {
+    days: 30,
+    groupBy: 'kind',
+    filters: [],
+    options: {
+      kind: [],
+      type: [],
+      owner: [],
+      system: [],
+      domain: [],
+      lifecycle: [],
+      namespace: [],
+      tag: [],
+      annotations: [],
+    },
+    snapshots: [],
+  };
+  return {
+    getCatalogDimensions: jest.fn().mockResolvedValue(result),
+  };
 }
 
 /**
@@ -140,6 +167,9 @@ describe('createRouter', () => {
   let app: express.Express;
   let db: jest.Mocked<AdoptionAnalyticsDatabase>;
   let dashboard: jest.Mocked<AdoptionAnalyticsDashboardService>;
+  let catalogDimensions: jest.Mocked<
+    Pick<CatalogDimensionService, 'getCatalogDimensions'>
+  >;
   let eventsQueue: jest.Mocked<EventsQueue>;
   let permissions: jest.Mocked<PermissionsService>;
 
@@ -148,12 +178,14 @@ describe('createRouter', () => {
   ): Promise<express.Express> {
     db = makeDbMock();
     dashboard = makeDashboardMock();
+    catalogDimensions = makeCatalogDimensionsMock();
     eventsQueue = makeQueueMock();
     permissions = makePermissionsMock(permissionOptions);
     const router = await createRouter({
       logger: mockServices.logger.mock(),
       db,
       dashboard,
+      catalogDimensions,
       httpAuth: mockServices.httpAuth(),
       userInfo: mockServices.userInfo(),
       cache: makeCacheStub(),
@@ -277,6 +309,47 @@ describe('createRouter', () => {
     it('rejects days above the cap with 400', async () => {
       const res = await request(app).get('/stats/entity-counts?days=9999');
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe('GET /stats/catalog-dimensions', () => {
+    it('passes validated grouping and filters to the service', async () => {
+      const filters = [
+        { dimension: 'owner', value: 'group:default/team-a' },
+        { dimension: 'tag', value: 'frontend', match: 'and' },
+        { dimension: 'annotation', key: 'docs/url', value: 'guide' },
+      ];
+      const query = new URLSearchParams({
+        days: '7',
+        groupBy: 'tag',
+        filters: JSON.stringify(filters),
+      });
+
+      const res = await request(app).get(
+        `/stats/catalog-dimensions?${query.toString()}`,
+      );
+
+      expect(res.status).toBe(200);
+      expect(catalogDimensions.getCatalogDimensions).toHaveBeenCalledWith(
+        7,
+        'tag',
+        filters,
+      );
+    });
+
+    it('rejects malformed or unsupported filters', async () => {
+      const malformed = await request(app).get(
+        '/stats/catalog-dimensions?filters=not-json',
+      );
+      expect(malformed.status).toBe(400);
+
+      const unsupported = await request(app)
+        .get('/stats/catalog-dimensions')
+        .query({
+          filters: JSON.stringify([{ dimension: 'invalid', value: 'x' }]),
+        });
+      expect(unsupported.status).toBe(400);
+      expect(catalogDimensions.getCatalogDimensions).not.toHaveBeenCalled();
     });
   });
 
