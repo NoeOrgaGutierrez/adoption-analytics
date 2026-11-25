@@ -445,7 +445,10 @@ export function EntityGrowthChart({ data, range }: Props) {
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const allKinds = useMemo(() => collectKinds(data), [data]);
+  const allKinds = useMemo(
+    () => collectKinds(data, analytics?.options.kind),
+    [analytics?.options.kind, data],
+  );
   const activeKind =
     kindFilter !== ALL_KINDS && allKinds.includes(kindFilter)
       ? kindFilter
@@ -1245,8 +1248,11 @@ function buildChart(
   return { rows, series };
 }
 
-function collectKinds(data: EntityGrowthPoint[]): string[] {
-  const seen = new Set<string>();
+function collectKinds(
+  data: EntityGrowthPoint[],
+  availableKinds: string[] = [],
+): string[] {
+  const seen = new Set(availableKinds);
   for (const point of data) {
     for (const kind of Object.keys(point.counts)) {
       seen.add(kind);
