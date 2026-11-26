@@ -10,6 +10,7 @@ import { AuthorizeResult } from '@backstage/plugin-permission-common';
 import {
   adoptionAnalyticsPageViewPermission,
   adoptionAnalyticsUsersReadPermission,
+  type CatalogDimensionFilter,
   type AdoptionAnalyticsDashboard,
 } from '@codeverse-gp/plugin-adoption-analytics-common';
 import express from 'express';
@@ -20,9 +21,12 @@ import type {
   SharedKpis,
 } from './service/AdoptionAnalyticsDashboardService';
 import type { AdoptionAnalyticsDatabase } from './service/AdoptionAnalyticsDatabase';
+import type { CatalogDimensionService } from './service/CatalogDimensionService';
 import { maskUserRef } from './service/mask';
 import {
   activeUsersQuerySchema,
+  catalogDimensionFiltersSchema,
+  catalogDimensionsQuerySchema,
   dashboardQuerySchema,
   entityCountsQuerySchema,
   adoptionAnalyticsEventBatchSchema,
@@ -47,6 +51,7 @@ export type RouterOptions = {
   logger: LoggerService;
   db: AdoptionAnalyticsDatabase;
   dashboard: AdoptionAnalyticsDashboardService;
+  catalogDimensions: Pick<CatalogDimensionService, 'getCatalogDimensions'>;
   httpAuth: HttpAuthService;
   userInfo: UserInfoService;
   cache: CacheService;
@@ -63,6 +68,7 @@ export async function createRouter(
     logger,
     db,
     dashboard,
+    catalogDimensions,
     httpAuth,
     userInfo,
     cache,
@@ -136,6 +142,45 @@ export async function createRouter(
     }
     const snapshots = await db.getEntityCountSnapshots(parsed.data.days);
     res.json({ snapshots });
+  });
+
+  // ---- Read: grouped catalog dimensions -------------------------------
+  router.get('/stats/catalog-dimensions', async (req, res) => {
+    const parsed = catalogDimensionsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      throw new InputError(
+        `Invalid catalog-dimensions query: ${parsed.error.message}`,
+      );
+    }
+
+    let filters: CatalogDimensionFilter[] = [];
+    if (parsed.data.filters) {
+      let rawFilters: unknown;
+      try {
+        rawFilters = JSON.parse(parsed.data.filters);
+      } catch (error) {
+        throw new InputError(
+          `Invalid catalog-dimensions filters JSON: ${
+            (error as Error).message
+          }`,
+        );
+      }
+
+      const filtersResult = catalogDimensionFiltersSchema.safeParse(rawFilters);
+      if (!filtersResult.success) {
+        throw new InputError(
+          `Invalid catalog-dimensions filters: ${filtersResult.error.message}`,
+        );
+      }
+      filters = filtersResult.data;
+    }
+
+    const result = await catalogDimensions.getCatalogDimensions(
+      parsed.data.days,
+      parsed.data.groupBy,
+      filters,
+    );
+    res.json(result);
   });
 
   // ---- Read: DAU / WAU ------------------------------------------------

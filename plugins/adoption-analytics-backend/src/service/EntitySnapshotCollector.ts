@@ -1,6 +1,8 @@
 import type { AuthService, LoggerService } from '@backstage/backend-plugin-api';
 import type { CatalogService } from '@backstage/plugin-catalog-node';
+import { stringifyEntityRef } from '@backstage/catalog-model';
 import type {
+  CatalogEntitySnapshotRow,
   EntityCountRow,
   AdoptionAnalyticsDatabase,
 } from './AdoptionAnalyticsDatabase';
@@ -14,9 +16,9 @@ type Options = {
 
 /**
  * Runs periodically to snapshot catalog entity counts grouped by
- * `(kind, spec.type)`. One snapshot per UTC day; re-runs on the same day
- * overwrite the previous value so a restart late in the day still yields
- * the freshest count.
+ * `(kind, spec.type)`, alongside entity attributes for dimension filtering.
+ * One snapshot per UTC day; re-runs on the same day overwrite the previous
+ * value so a restart late in the day still yields the freshest count.
  */
 export class EntitySnapshotCollector {
   constructor(private readonly options: Options) {}
@@ -37,9 +39,11 @@ export class EntitySnapshotCollector {
     // legal per the catalog spec) can't collide with an actual kind
     // name via naive concatenation. Empty string means "no type set".
     const buckets = new Map<string, EntityCountRow>();
+    const entityRows: CatalogEntitySnapshotRow[] = [];
     for (const entity of items) {
       const kind = entity.kind;
-      const rawType = (entity.spec as { type?: unknown } | undefined)?.type;
+      const spec = (entity.spec ?? {}) as Record<string, unknown>;
+      const rawType = spec.type;
       // Trim the value so entities with a whitespace-only `spec.type`
       // (e.g. `' '`) collapse into the same untyped bucket rather than
       // producing a legend entry with an invisible label.
@@ -48,10 +52,37 @@ export class EntitySnapshotCollector {
       const cur = buckets.get(key);
       if (cur) cur.count += 1;
       else buckets.set(key, { kind, type, count: 1 });
+
+      const metadata = entity.metadata;
+      const annotations = Object.fromEntries(
+        Object.entries(metadata.annotations ?? {}).filter(
+          (entry): entry is [string, string] => typeof entry[1] === 'string',
+        ),
+      );
+      entityRows.push({
+        entityRef: stringifyEntityRef(entity),
+        kind,
+        type,
+        dimensions: {
+          owner: stringValue(spec.owner),
+          system: stringValue(spec.system),
+          domain: stringValue(spec.domain),
+          lifecycle: stringValue(spec.lifecycle),
+          namespace: stringValue(metadata.namespace) ?? 'default',
+          tags: [
+            ...new Set(
+              (metadata.tags ?? [])
+                .map(tag => tag.trim())
+                .filter(tag => tag.length > 0),
+            ),
+          ],
+          annotations,
+        },
+      });
     }
 
     const date = new Date().toISOString().slice(0, 10);
-    await db.upsertEntitySnapshot(date, [...buckets.values()]);
+    await db.upsertEntitySnapshot(date, [...buckets.values()], entityRows);
 
     // Include the actual (kind, type) breakdown in the log so operators
     // can verify at a glance which types were captured — otherwise the
@@ -87,4 +118,10 @@ export class EntitySnapshotCollector {
       }
     }
   }
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : null;
 }

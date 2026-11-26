@@ -8,6 +8,8 @@ Types, permissions and constants shared by the Adoption Analytics frontend and b
 This package exists so the dashboard payload has exactly one definition, and so
 the permission policy can reference the Adoption Analytics permissions without depending
 on the backend plugin. It contains no runtime logic beyond constants.
+It also exports the request and response types used by the catalog-dimensions
+endpoint and its filters.
 
 ## Install
 

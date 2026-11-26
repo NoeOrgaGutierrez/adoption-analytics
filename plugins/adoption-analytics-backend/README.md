@@ -8,14 +8,14 @@ snapshots the catalog daily, and serves the aggregated dashboard.
 
 ## What it provides
 
-| Capability            | Detail                                                                       |
-| --------------------- | ---------------------------------------------------------------------------- |
-| Event ingest          | Batched `POST /events`, buffered in memory and flushed to Postgres every 5s  |
-| Catalog snapshots     | Entity counts per kind and type, written once per day                        |
-| Dashboard aggregation | One endpoint returns every KPI, chart series and table the UI needs          |
-| Identity pseudonymes  | User refs are hashed unless the caller holds `adoption-analytics.users.read` |
-| Access control        | All read endpoints are gated behind `adoption-analytics.page.view`           |
-| Retention             | Daily job prunes raw events older than `adoptionAnalytics.retentionDays`     |
+| Capability            | Detail                                                                                             |
+| --------------------- | -------------------------------------------------------------------------------------------------- |
+| Event ingest          | Batched `POST /events`, buffered in memory and flushed to Postgres every 5s                        |
+| Catalog snapshots     | Entity counts per kind/type plus owner, system, domain, lifecycle, namespace, tags and annotations |
+| Dashboard aggregation | Dashboard payload plus filtered catalog-dimension series                                           |
+| Identity pseudonymes  | User refs are hashed unless the caller holds `adoption-analytics.users.read`                       |
+| Access control        | All read endpoints are gated behind `adoption-analytics.page.view`                                 |
+| Retention             | Daily job prunes raw events older than `adoptionAnalytics.retentionDays`                           |
 
 ## Install
 
@@ -60,12 +60,12 @@ adoptionAnalytics:
   userMaskSalt: ${ADOPTION_ANALYTICS_MASK_SALT}
 ```
 
-| Key                                | Type       | Default  | Visibility | Notes                                                     |
-| ---------------------------------- | ---------- | -------- | ---------- | --------------------------------------------------------- |
-| `adoptionAnalytics.retentionDays`  | `number`   | `90`     | backend    | Prunes `insights_events` only; snapshots are never pruned |
-| `adoptionAnalytics.viewerGroups`   | `string[]` | `[]`     | backend    | Empty means **allow all**                                 |
-| `adoptionAnalytics.identityGroups` | `string[]` | `[]`     | backend    | Empty means **mask for all**                              |
-| `adoptionAnalytics.userMaskSalt`   | `string`   | built-in | secret     | Changing it re-pseudonymises every user                   |
+| Key                                | Type       | Default  | Visibility | Notes                                                        |
+| ---------------------------------- | ---------- | -------- | ---------- | ------------------------------------------------------------ |
+| `adoptionAnalytics.retentionDays`  | `number`   | `90`     | backend    | Prunes `insights_events`; aggregate snapshots are not pruned |
+| `adoptionAnalytics.viewerGroups`   | `string[]` | `[]`     | backend    | Empty means **allow all**                                    |
+| `adoptionAnalytics.identityGroups` | `string[]` | `[]`     | backend    | Empty means **mask for all**                                 |
+| `adoptionAnalytics.userMaskSalt`   | `string`   | built-in | secret     | Changing it re-pseudonymises every user                      |
 
 `viewerGroups` and `identityGroups` are read by the permission policy in
 `packages/backend/src/extensions/permissionsPolicyExtension.ts`, not by this
@@ -125,14 +125,15 @@ silently stop collecting data for everyone outside the viewer allowlist.
 
 Mounted at `/api/adoption-analytics`. All routes require a signed-in caller.
 
-| Method | Path                   | Query                                                          | Returns                                |
-| ------ | ---------------------- | -------------------------------------------------------------- | -------------------------------------- |
-| `GET`  | `/health`              | —                                                              | `{ status: 'ok' }`                     |
-| `POST` | `/events`              | —                                                              | `{ accepted: number }`                 |
-| `GET`  | `/stats/dashboard`     | `range`: `7d` \| `30d` \| `90d` (default `30d`)                | `AdoptionAnalyticsDashboard`           |
-| `GET`  | `/stats/entity-counts` | `days`: 1–365 (default `30`)                                   | `{ snapshots: EntityCountSnapshot[] }` |
-| `GET`  | `/stats/active-users`  | `window`: `daily` \| `weekly` (default `daily`), `days`: 1–365 | `ActiveUsersSummary`                   |
-| `GET`  | `/stats/logins`        | `limit`: 1–500 (default `50`)                                  | `{ logins: LoginEvent[] }`             |
+| Method | Path                        | Query                                                          | Returns                                |
+| ------ | --------------------------- | -------------------------------------------------------------- | -------------------------------------- |
+| `GET`  | `/health`                   | —                                                              | `{ status: 'ok' }`                     |
+| `POST` | `/events`                   | —                                                              | `{ accepted: number }`                 |
+| `GET`  | `/stats/dashboard`          | `range`: `7d` \| `30d` \| `90d` (default `30d`)                | `AdoptionAnalyticsDashboard`           |
+| `GET`  | `/stats/entity-counts`      | `days`: 1–365 (default `30`)                                   | `{ snapshots: EntityCountSnapshot[] }` |
+| `GET`  | `/stats/catalog-dimensions` | `days`, `groupBy`, `filters`                                   | `CatalogDimensionAnalytics`            |
+| `GET`  | `/stats/active-users`       | `window`: `daily` \| `weekly` (default `daily`), `days`: 1–365 | `ActiveUsersSummary`                   |
+| `GET`  | `/stats/logins`             | `limit`: 1–500 (default `50`)                                  | `{ logins: LoginEvent[] }`             |
 
 Every query string and request body is validated with `zod` before use;
 malformed input returns `400`. `POST /events` accepts 1–100 events per batch.
@@ -140,6 +141,17 @@ Denied callers get `403`.
 
 `GET /stats/dashboard` is the endpoint the UI uses — it returns the entire
 payload in one round trip so the frontend never stitches responses together.
+The catalog tab uses `/stats/catalog-dimensions` for attribute-based grouping
+and filtering. Its `groupBy` accepts `kind`, `type`, `owner`, `system`, `domain`,
+`lifecycle`, `namespace` or `tag`. `filters` is an optional JSON-encoded array;
+scalar filters use `{ "dimension": "owner", "value": "group:default/team-a" }`,
+and annotation filters use `{ "dimension": "annotation", "key": "docs/url",
+"value": "guide" }` to match annotation values case-insensitively. Multiple
+filters are combined with AND, while multiple values of the same dimension are
+combined with OR. Tag filters can set `"match": "and"` to require every
+selected tag; the default is `"or"`. The response includes available filter
+options and counts by date. This endpoint is additive; existing dashboard and
+entity-count response shapes are unchanged.
 
 Its `topPages` field groups navigation events by the **first path segment**
 (`/docs/default/component/foo` becomes `/docs`). Raw pathnames embed entity refs
@@ -161,19 +173,21 @@ cache entry serves both permission variants.
 
 ## Scheduled tasks
 
-| Task ID                              | Every | Timeout | Purpose                                         |
-| ------------------------------------ | ----- | ------- | ----------------------------------------------- |
-| `adoption-analytics-events-flush`    | 5s    | 30s     | Drains the in-process queue into the database   |
-| `adoption-analytics-entity-snapshot` | 5m    | 10m     | Upserts today's entity counts per kind and type |
-| `adoption-analytics-retention`       | 24h   | 30m     | Deletes events older than `retentionDays`       |
+| Task ID                              | Every | Timeout | Purpose                                              |
+| ------------------------------------ | ----- | ------- | ---------------------------------------------------- |
+| `adoption-analytics-events-flush`    | 5s    | 30s     | Drains the in-process queue into the database        |
+| `adoption-analytics-entity-snapshot` | 5m    | 10m     | Upserts today's grouped counts and entity dimensions |
+| `adoption-analytics-retention`       | 24h   | 30m     | Prunes old events and catalog dimension snapshots    |
 
 The snapshot task runs every 5 minutes but writes at most one row set per
 calendar date, replacing the day's rows each time so the final value reflects
-the catalog at end of day.
+the catalog at end of day. Per-entity dimensions become available from the
+first successful snapshot after this migration; existing aggregate snapshots
+do not contain enough information to backfill those dimensions.
 
 ## Database
 
-Two tables, created by migrations in `migrations/`.
+Three tables, created by migrations in `migrations/`.
 
 **`insights_events`** — one row per captured event.
 
@@ -185,6 +199,14 @@ composite `(timestamp, action)`.
 
 `id`, `date` (`YYYY-MM-DD`), `kind`, `type`, `count`. Unique on
 `(date, kind, type)`.
+
+**`insights_catalog_entity_snapshots`** — one row per catalog entity per day,
+replaced on each snapshot refresh. Stores `entity_ref`, `kind`, `type` and a
+JSON `dimensions` value containing owner, system, domain, lifecycle, namespace,
+tags and annotations. This supports arbitrary filter combinations without
+changing the existing aggregate snapshot table. Dimension rows older than 365
+days are pruned by the retention task; this limit is independent of
+`adoptionAnalytics.retentionDays`.
 
 ## Local development
 

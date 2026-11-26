@@ -1,6 +1,9 @@
 import type { DiscoveryApi, FetchApi } from '@backstage/core-plugin-api';
 import type {
   ActiveUsersSummary,
+  CatalogDimension,
+  CatalogDimensionAnalytics,
+  CatalogDimensionFilter,
   EntityCountSnapshot,
   AdoptionAnalyticsDashboard,
   AdoptionAnalyticsEvent,
@@ -45,6 +48,23 @@ export class AdoptionAnalyticsClient implements AdoptionAnalyticsApi {
     );
     return (await this.parseJson<{ snapshots: EntityCountSnapshot[] }>(res))
       .snapshots;
+  }
+
+  async getCatalogDimensions(
+    days: number,
+    groupBy: CatalogDimension,
+    filters: CatalogDimensionFilter[],
+  ): Promise<CatalogDimensionAnalytics> {
+    const base = await this.baseUrl();
+    const query = new URLSearchParams({
+      days: String(days),
+      groupBy,
+      filters: JSON.stringify(filters),
+    });
+    const res = await this.options.fetchApi.fetch(
+      `${base}/stats/catalog-dimensions?${query.toString()}`,
+    );
+    return this.parseJson<CatalogDimensionAnalytics>(res);
   }
 
   async getActiveUsers(

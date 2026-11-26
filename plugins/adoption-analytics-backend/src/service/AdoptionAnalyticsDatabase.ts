@@ -42,6 +42,31 @@ type SnapshotRow = {
   count: number;
 };
 
+export type CatalogEntityDimensions = {
+  owner: string | null;
+  system: string | null;
+  domain: string | null;
+  lifecycle: string | null;
+  namespace: string;
+  tags: string[];
+  annotations: Record<string, string>;
+};
+
+export type CatalogEntitySnapshotRow = {
+  entityRef: string;
+  kind: string;
+  type: string;
+  dimensions: CatalogEntityDimensions;
+};
+
+type PersistedCatalogEntitySnapshotRow = {
+  date: string;
+  entity_ref: string;
+  kind: string;
+  type: string;
+  dimensions: string;
+};
+
 /**
  * Input row for `upsertEntitySnapshot`. `type` is the raw `spec.type`
  * value, or the empty string when an entity has no type.
@@ -87,20 +112,62 @@ export class AdoptionAnalyticsDatabase {
   async upsertEntitySnapshot(
     date: string,
     rows: EntityCountRow[],
+    entities: CatalogEntitySnapshotRow[] = [],
   ): Promise<void> {
-    if (rows.length === 0) return;
     const dbRows: SnapshotRow[] = rows.map(r => ({
       date,
       kind: r.kind,
       type: r.type,
       count: r.count,
     }));
+    const catalogRows = entities.map(entity => ({
+      date,
+      entity_ref: entity.entityRef,
+      kind: entity.kind,
+      type: entity.type,
+      dimensions: JSON.stringify(entity.dimensions),
+    }));
     // Use manual upsert so this works on both SQLite and Postgres without
     // depending on dialect-specific `.onConflict()` behavior.
     await this.db.transaction(async trx => {
       await trx('insights_entity_snapshots').where({ date }).del();
-      await trx('insights_entity_snapshots').insert(dbRows);
+      await trx('insights_catalog_entity_snapshots').where({ date }).del();
+      if (dbRows.length > 0) {
+        await trx('insights_entity_snapshots').insert(dbRows);
+      }
+      // Keep insert batches below SQLite's parameter limit even for large
+      // catalogs; each row carries six bound values.
+      for (let i = 0; i < catalogRows.length; i += 500) {
+        await trx('insights_catalog_entity_snapshots').insert(
+          catalogRows.slice(i, i + 500),
+        );
+      }
     });
+  }
+
+  async getCatalogEntitySnapshots(
+    days: number,
+  ): Promise<Array<CatalogEntitySnapshotRow & { date: string }>> {
+    const since = isoDate(daysAgo(days - 1));
+    const rows = await this.db('insights_catalog_entity_snapshots')
+      .select('date', 'entity_ref', 'kind', 'type', 'dimensions')
+      .where('date', '>=', since)
+      .orderBy('date', 'asc');
+
+    return (rows as PersistedCatalogEntitySnapshotRow[]).map(row => ({
+      date: row.date,
+      entityRef: row.entity_ref,
+      kind: row.kind,
+      type: row.type,
+      dimensions: JSON.parse(row.dimensions) as CatalogEntityDimensions,
+    }));
+  }
+
+  async deleteCatalogEntitySnapshotsOlderThan(days: number): Promise<number> {
+    const cutoff = isoDate(daysAgo(days));
+    return this.db('insights_catalog_entity_snapshots')
+      .where('date', '<', cutoff)
+      .del();
   }
 
   async getEntityCountSnapshots(days: number): Promise<EntityCountSnapshot[]> {
